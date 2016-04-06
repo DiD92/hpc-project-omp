@@ -38,7 +38,7 @@
 // -- AUXILIARY METHODS ----------------------------------------------------//
 //--------------------------------------------------------------------------//
 
-time_t toSeconds(suseconds_t);
+double toSeconds(suseconds_t);
 
 //--------------------------------------------------------------------------//
 // -- LIBRARY IMPLEMENTATION ---------------------------------------------- //
@@ -309,7 +309,7 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
 
 //--------------------------------------------------------------------------//
 
-time_t toSeconds(suseconds_t micros) {
+double toSeconds(suseconds_t micros) {
     return (micros / F_MICROS_IN_SECOND);
 }
 
@@ -433,7 +433,7 @@ int main(int argc, char **argv) {
         
         // Duplicate the image chunk
         gettimeofday(&tim, NULL);
-        start = tim.tv_sec+toSeconds(tim.tv_usec);
+        start = tim.tv_sec + toSeconds(tim.tv_usec);
         if ( duplicateImageChunk(source, output, chunksize) ) {
             return -1;
         }
