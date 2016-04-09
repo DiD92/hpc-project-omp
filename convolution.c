@@ -20,13 +20,13 @@
 //--------------------------------------------------------------------------//
 
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/time.h>
 
 //--------------------------------------------------------------------------//
 
-#include "convolution.h"
+#include "lib/convolution.h"
 
 //--------------------------------------------------------------------------//
 // -- MACRO DEFINITION -----------------------------------------------------//
@@ -43,73 +43,6 @@ double toSeconds(suseconds_t);
 //--------------------------------------------------------------------------//
 // -- LIBRARY IMPLEMENTATION ---------------------------------------------- //
 //--------------------------------------------------------------------------//
-
-// Open Image file and image struct initialization
-ImageData initimage(char* nombre, FILE **fp, int partitions, int halo) {
-    char c, comment[300];
-    int i, chunk = 0;
-    ImageData img = NULL;
-
-    if ((*fp = fopen(nombre, "r")) == NULL) {
-        perror("Error: ");
-    } else {
-        // Memory allocation
-        img = (ImageData) malloc(sizeof(struct imageppm));
- 
-        // Reading the first line: Magical Number "P3"
-        fscanf(*fp, "%c%d ", &c, &(img->P));
-        
-        // Reading the image comment
-        for(i = 0; (c = fgetc(*fp)) != '\n'; i++) {
-        	comment[i] = c;
-        }
-        comment[i] = '\0';
-        // Allocating information for the image comment
-        img->comment = calloc(strlen(comment), sizeof(char));
-        strcpy(img->comment, comment);
-        // Reading image dimensions and color resolution
-        fscanf(*fp, "%d %d %d", &img->width, &img->height, &img->maxcolor);
-        chunk = img->width * (img->height / partitions);
-        // We need to read an extra row.
-        chunk = chunk + img->width * halo;
-        img->R = calloc(chunk, sizeof(int));
-        img->G = calloc(chunk, sizeof(int));
-        img->B = calloc(chunk, sizeof(int));
-        if((img->R == NULL) || (img->G == NULL) || (img->B == NULL)) {
-        	return NULL;
-        }
-    }
-
-    return img;
-}
-
-// Duplicate the Image struct for the resulting image
-ImageData duplicateImageData(ImageData src, int partitions, int halo) {
-    int chunk;
-    // Struct memory allocation
-    ImageData dst = (ImageData) malloc(sizeof(struct imageppm));
-
-    // Copying the magic number
-    dst->P = src->P;
-    // Copying the string comment
-    dst->comment = calloc(strlen(src->comment), sizeof(char));
-    strcpy(dst->comment, src->comment);
-    // Copying image dimensions and color resolution
-    dst->width = src->width;
-    dst->height = src->height;
-    dst->maxcolor = src->maxcolor;
-    chunk = dst->width * (dst->height / partitions);
-    // We need to read an extra row.
-    chunk = chunk + src->width * halo;
-    dst->R = calloc(chunk, sizeof(int));
-    dst->G = calloc(chunk, sizeof(int));
-    dst->B = calloc(chunk, sizeof(int));
-    if((dst->R == NULL) || (dst->G == NULL) || (dst->B == NULL)) {
-    	return NULL;
-    }
-
-    return dst;
-}
 
 // Read the corresponding chunk from the source Image
 int readImage(ImageData img, FILE **fp, int dim, int halosize, 
@@ -132,23 +65,19 @@ int readImage(ImageData img, FILE **fp, int dim, int halosize,
 
 // Duplication of the  just readed source chunk 
 // to the destiny image struct chunk
-int duplicateImageChunk(ImageData src, ImageData dst, int dim) {
+int duplicateImageChunk(ImageData src, ImageData dst) {
     
-    for(int i = 0; i < dim; i++){
-        dst->R[i] = src->R[i];
-        dst->G[i] = src->G[i];
-        dst->B[i] = src->B[i];
-    }
+    memcpy((void*) dst, (void*) src, sizeof(dst));
 
     return 0;
 }
 
 // Open kernel file and reading kernel matrix. 
 // The kernel matrix 2D is stored in 1D format.
-kernelData leerKernel(char* nombre) {
+KernelData readKernel(char* nombre) {
     FILE *fp;
-    int i = 0;
-    kernelData kern = NULL;
+    int i = 0, ksize = 0;
+    KernelData kern = NULL;
     
     // Opening the kernel file
     fp = fopen(nombre, "r");
@@ -156,18 +85,18 @@ kernelData leerKernel(char* nombre) {
         perror("Error: ");
     } else {
         // Memory allocation
-        kern = (kernelData) malloc(sizeof(struct structkernel));
+        kern = (KernelData) malloc(sizeof(struct structkernel));
         
         // Reading kernel matrix dimensions
-        fscanf(fp,"%d,%d,", &kern->kernelX, &kern->kernelY);
-        kern->vkern = (float*) malloc(kern->kernelX * 
-            kern->kernelY * sizeof(float));
+        fscanf(fp, "%d,%d,", &kern->kernelX, &kern->kernelY);
+        ksize = (kern->kernelX * kern->kernelY);
+        kern->vkern = (float*) malloc(ksize * sizeof(float));
         
         // Reading kernel matrix values
-        for(i = 0; i < (kern->kernelX * kern->kernelY) - 1; i++) {
+        for(i = 0; i < ksize; i++) {
             fscanf(fp, "%f,", &kern->vkern[i]);
         }
-        fscanf(fp, "%f", &kern->vkern[i]);
+
         fclose(fp);
     }
 
@@ -177,7 +106,7 @@ kernelData leerKernel(char* nombre) {
 // Open the image file with the convolution results
 int initfilestore(ImageData img, FILE** fp, char* nombre, long *position) {
     // File with the resulting image is created
-    if ( (*fp=fopen(nombre,"w")) == NULL ) {
+    if ((*fp=fopen(nombre,"w")) == NULL) {
         perror("Error: ");
         return -1;
     }
@@ -224,7 +153,7 @@ void freeImagestructure(ImageData *src) {
 //--------------------------------------------------------------------------//
 int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
                float* kernel, int kernelSizeX, int kernelSizeY) {
-    int i, j, m, n;
+    int m, n;
     int *inPtr, *inPtr2, *outPtr;
     float *kPtr;
     int kCenterX, kCenterY;
@@ -233,11 +162,7 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
     float sum;                             // temp accumulation buffer
     
     // Parameter validatin
-    if(!in || !out || !kernel) { 
-        return -1;
-    }
-
-    if(dataSizeX <= 0 || kernelSizeX <= 0) { 
+    if(!in || !out || !kernel || dataSizeX <= 0 || kernelSizeX <= 0) { 
         return -1;
     }
     
@@ -253,14 +178,14 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
     
     // start convolution
     // number of rows
-    for(i= 0; i < dataSizeY; ++i) {
+    for(int i = 0; i < dataSizeY; ++i) {
         // compute the range of convolution, the current row of kernel 
         // should be between these
         rowMax = i + kCenterY;
         rowMin = i - dataSizeY + kCenterY;
         
         // number of columns
-        for(j = 0; j < dataSizeX; ++j) {
+        for(int j = 0; j < dataSizeX; ++j) {
             // compute the range of convolution, the current column of kernel 
             // should be between these
             colMax = j + kCenterX;
@@ -319,12 +244,13 @@ double toSeconds(suseconds_t micros) {
 int main(int argc, char **argv) {
     int c, offset;
     int partitions, partsize, chunksize, halo, halosize;
+    int iwidth, iheight;
     long position;
     double start, tstart, tend, tread, tcopy, tconv, tstore, treadk;
     struct timeval tim;
     FILE *fpsrc, *fpdst;
     ImageData source, output;
-    kernelData kern;
+    KernelData kern;
 
     c = offset = 0;
     position = 0L;
@@ -358,7 +284,7 @@ int main(int argc, char **argv) {
     gettimeofday(&tim, NULL);
     start = tim.tv_sec + toSeconds(tim.tv_usec);
     tstart = start;
-    if ( (kern = leerKernel(argv[2])) == NULL) {
+    if ( (kern = readKernel(argv[2])) == NULL) {
         return -1;
     }
     // The matrix kernel define the halo size to use with the image. 
@@ -376,9 +302,14 @@ int main(int argc, char **argv) {
     gettimeofday(&tim, NULL);
     start = tim.tv_sec + toSeconds(tim.tv_usec);
     // Memory allocation based on number of partitions and halo size.
-    if ((source = initimage(argv[1], &fpsrc, partitions, halo)) == NULL) {
+    source = parseFileHeader(argv[1], &fpsrc, partitions, halo);
+    if (source == NULL) {
         return -1;
     }
+
+    iwidth = source->width;
+    iheight = source->height;
+
     gettimeofday(&tim, NULL);
     tread = tread + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
     
@@ -391,7 +322,7 @@ int main(int argc, char **argv) {
     gettimeofday(&tim, NULL);
     tcopy = tcopy + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
     
-    // Initialize Image Storing file. Open the file and store the image header.
+    // Initialize Image Storing file. Open the file and store the image header
     gettimeofday(&tim, NULL);
     start = tim.tv_sec + toSeconds(tim.tv_usec);
     if (initfilestore(output, &fpdst, argv[3], &position) != 0) {
@@ -405,36 +336,35 @@ int main(int argc, char **argv) {
     // CHUNK READING
     //----------------------------------------------------------------------//
     partsize  = (source->height * source->width) / partitions;
+
     while (c < partitions) {
         // Reading Next chunk.
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if (c==0) {
+        if (c == 0) {
             halosize  = halo / 2;
-            chunksize = partsize + (source->width*halosize);
+            chunksize = partsize + (source->width * halosize);
             offset   = 0;
-        }
-        else if(c < (partitions - 1)) {
+        } else if(c < (partitions - 1)) {
             halosize  = halo;
             chunksize = partsize + (source->width*halosize);
             offset    = (source->width * (halo / 2));
-        }
-        else {
-            halosize  = halo/2;
+        } else {
+            halosize  = halo / 2;
             chunksize = partsize + (source->width*halosize);
-            offset    = (source->width * (halo / 2));
+            offset    = (source->width * halosize);
         }
         
         if (readImage(source, &fpsrc, chunksize, halo / 2, &position)) {
             return -1;
         }
         gettimeofday(&tim, NULL);
-        tread = tread + (tim.tv_sec+toSeconds(tim.tv_usec) - start);
+        tread = tread + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
         
         // Duplicate the image chunk
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if ( duplicateImageChunk(source, output, chunksize) ) {
+        if ( duplicateImageChunk(source, output) ) {
             return -1;
         }
         gettimeofday(&tim, NULL);
@@ -447,13 +377,13 @@ int main(int argc, char **argv) {
         start = tim.tv_sec + toSeconds(tim.tv_usec);
         
         convolve2D(source->R, output->R, source->width, 
-            (source->height/partitions)+halosize, kern->vkern, 
+            (source->height/partitions) + halosize, kern->vkern, 
             kern->kernelX, kern->kernelY);
         convolve2D(source->G, output->G, source->width, 
-            (source->height/partitions)+halosize, kern->vkern, 
+            (source->height/partitions) + halosize, kern->vkern, 
             kern->kernelX, kern->kernelY);
         convolve2D(source->B, output->B, source->width, 
-            (source->height/partitions)+halosize, kern->vkern, 
+            (source->height/partitions) + halosize, kern->vkern, 
             kern->kernelX, kern->kernelY);
         
         gettimeofday(&tim, NULL);
@@ -482,17 +412,25 @@ int main(int argc, char **argv) {
     gettimeofday(&tim, NULL);
     tend = tim.tv_sec + toSeconds(tim.tv_usec);
     
-    printf("Imatge: %s\n", argv[1]);
-    printf("ISizeX : %d\n", source->width);
-    printf("ISizeY : %d\n", source->height);
+    printf("-----------------------------------\n");
+    printf("|          IMAGE INFO             |\n");
+    printf("-----------------------------------\n");
+    printf("Name: %s\n", argv[1]);
+    printf("ISizeX : %d\n", iwidth);
+    printf("ISizeY : %d\n", iheight);
     printf("kSizeX : %d\n", kern->kernelX);
     printf("kSizeY : %d\n", kern->kernelY);
-    printf("%.6lf s elapsed for Reading image file.\n", tread);
-    printf("%.6lf s elapsed for copying image structure.\n", tcopy);
-    printf("%.6lf s elapsed for Reading kernel matrix.\n", treadk);
-    printf("%.6lf s elapsed for make the convolution.\n", tconv);
-    printf("%.6lf s elapsed for writing the resulting image.\n", tstore);
-    printf("%.6lf s elapsed\n", tend-tstart);
+    printf("-----------------------------------\n");
+    printf("|         EXECUTION TIMES         |\n");
+    printf("-----------------------------------\n");
+    printf("%.6lfs elapsed in reading image file.\n", tread);
+    printf("%.6lfs elapsed in copying image structure.\n", tcopy);
+    printf("%.6lfs elapsed in reading kernel matrix.\n", treadk);
+    printf("%.6lfs elapsed computing the convolution.\n", tconv);
+    printf("%.6lfs elapsed in writing the resulting image.\n", tstore);
+    printf("-----------------------------------\n");
+    printf("%.6lfs elapsed in total.\n", tend-tstart);
+    printf("-----------------------------------\n");
     return 0;
 }
 

@@ -1,11 +1,13 @@
+#ifndef __PPM_PARSER_H__
+#define __PPM_PARSER_H__
 //--------------------------------------------------------------------------//
 //
-//  convolution.h
+//  ppmparser.h
 //
-//  Created by Josep Lluis Lerida on 11/03/2015
-//  Modified by Didac Semente Fernandez on 04/04/2016
+//  Created by Didac Semente Fernandez on 09/04/2016
 //
-// Type and method definitions for the convolution.c file.
+// Parser used to read PPM files compliant with the PPM format standard,
+// standard source: http://netpbm.sourceforge.net/doc/ppm.html
 //
 //--------------------------------------------------------------------------//
 
@@ -38,20 +40,14 @@ struct structkernel {
     float *vkern;
 };
 
-typedef struct structkernel* kernelData;
+typedef struct structkernel* KernelData;
 
 //--------------------------------------------------------------------------//
 // -- METHOD DEFINITION --------------------------------------------------- //
 //--------------------------------------------------------------------------//
 
-ImageData initimage(char*, FILE**, int, int);
+ImageData parseFileHeader(char*, FILE**, int, int);
 ImageData duplicateImageData(ImageData, int, int);
 
-int readImage(ImageData, FILE**, int, int, long int*);
-int duplicateImageChunk(ImageData, ImageData, int);
-int initfilestore(ImageData, FILE**, char*, long*);
-int savingChunk(ImageData, FILE**, int, int);
-int convolve2D(int*, int*, int, int, float*, int, int);
-void freeImagestructure(ImageData*);
-
 //--------------------------------------------------------------------------//
+#endif
