@@ -3,7 +3,7 @@
 //  convolution.c
 //
 //  Created by Josep Lluis Lerida on 11/03/2015
-// Modified by Didac Semente Fernandez on 04/04/2016
+//  Modified by Didac Semente Fernandez on 04/04/2016
 //
 // This program calculates the convolution for PPM images.
 // The program accepts an PPM image file, a text definition of the kernel 
@@ -19,6 +19,8 @@
 // -- EXTERNAL LIBRARIES -------------------------------------------------- //
 //--------------------------------------------------------------------------//
 
+#include <assert.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,29 +35,87 @@
 //--------------------------------------------------------------------------//
 
 #define F_MICROS_IN_SECOND 1000000.0
+#define THREAD_NUM 1
+
+#define TRUE 1
+#define FALSE 0
+
+#define SIZE_MARGIN 1.10 // % of extra space reservation
+#define REALLOC_MARGIN 10
+#define INCREASE_FACTOR 100
 
 //--------------------------------------------------------------------------//
 // -- AUXILIARY METHODS ----------------------------------------------------//
 //--------------------------------------------------------------------------//
 
 double toSeconds(suseconds_t);
+long checkForRealloc(void**, long, long, size_t, long);
+long rebuildImage(ImageData, DataBucket*);
+
 
 //--------------------------------------------------------------------------//
 // -- LIBRARY IMPLEMENTATION ---------------------------------------------- //
 //--------------------------------------------------------------------------//
 
 // Read the corresponding chunk from the source Image
-int readImage(ImageData img, FILE **fp, int dim, int halosize, 
-              long *position) {
+int readChunk(char* filen, intmax_t *offset, intmax_t *limit, DataBucket bucket) {
+    intmax_t pos = *offset;
+    int value = 0, mult = 10;
+    int nvalue = FALSE;
+    long k = bucket->offset;
+    char c;
+
+    FILE *fp;
+
+    if ((fp = openFile(filen, "r")) == NULL) {
+        perror("Error: ");
+        return -1;
+    }
+
+    if(fseek(fp, pos, SEEK_SET)) {
+        perror("Error: ");
+        return -1;
+    }
+
+    for(;pos < *limit;) {
+        pos = ftell(fp);
+        c = fgetc(fp);
+        if(c > 47 && c < 58) {
+            value = value * mult + (c - 48);
+            nvalue = TRUE;
+        } else if(nvalue) {
+            bucket->data[k] = value;
+            value = 0;
+            nvalue = FALSE;
+            k++;
+            bucket->msize = checkForRealloc((void**) &(bucket->data), 
+                bucket->msize, k + REALLOC_MARGIN, sizeof(bucket->data[0]),
+                INCREASE_FACTOR);
+            if(bucket->msize == -1) {
+                perror("Error: ");
+                return -1;
+            }
+            fflush(stdout);
+        }
+    }
+
+    bucket->bsize = k;
+
+    fclose(fp);
+
+    return 0;
+}
+int readImage(ImageData img, FILE **fp, int chunksize, int halosize, 
+    long *offset) {
     int haloposition;
-    if (fseek(*fp, *position, SEEK_SET)) {
+    if (fseek(*fp, *offset, SEEK_SET)) {
         perror("Error: ");
     }
-    haloposition = dim - (img->width * (halosize * 2));
-    for(int i = 0; i < dim; i++) {
+    haloposition = chunksize - (img->width * (halosize * 2));
+    for(int i = 0; i < chunksize; i++) {
         // When start reading the halo store the position in the image file
         if (halosize != 0 && i == haloposition) {
-            *position=ftell(*fp);
+            *offset = ftell(*fp);
         } 
         fscanf(*fp, "%d %d %d ", &img->R[i], &img->G[i], &img->B[i]);
     }
@@ -65,11 +125,30 @@ int readImage(ImageData img, FILE **fp, int dim, int halosize,
 
 // Duplication of the  just readed source chunk 
 // to the destiny image struct chunk
-int duplicateImageChunk(ImageData src, ImageData dst) {
-    
-    memcpy((void*) dst, (void*) src, sizeof(dst));
+void* duplicateImageChunk(ImageData src, ImageData dst) {
 
-    return 0;
+    dst->rsize = checkForRealloc((void**) &(dst->R), dst->rsize, src->rsize, 
+        sizeof(dst->R[0]), src->rsize - dst->rsize);
+
+    dst->gsize = checkForRealloc((void**) &(dst->G), dst->gsize, src->gsize, 
+        sizeof(dst->G[0]), src->gsize - dst->gsize);
+
+    dst->bsize = checkForRealloc((void**) &(dst->B), dst->bsize, src->bsize, 
+        sizeof(dst->B[0]), src->bsize - dst->bsize);
+
+    if(dst->rsize == -1 || dst->bsize == -1 || dst->gsize == -1) {
+        return NULL;
+    }
+    
+    if(memcpy((void*) dst->R, (void*) src->R, dst->rsize * sizeof(dst->R[0])) == NULL) {
+        return NULL;
+    }
+
+    if(memcpy((void*) dst->G, (void*) src->G, dst->gsize * sizeof(dst->G[0])) == NULL) {
+        return NULL;
+    }
+
+    return memcpy((void*) dst->B, (void*) src->B, dst->bsize * sizeof(dst->B[0]));
 }
 
 // Open kernel file and reading kernel matrix. 
@@ -106,10 +185,10 @@ KernelData readKernel(char* nombre) {
 // Open the image file with the convolution results
 int initfilestore(ImageData img, FILE** fp, char* nombre, long *position) {
     // File with the resulting image is created
-    if ((*fp=fopen(nombre,"w")) == NULL) {
+    if((*fp = openFile(nombre, "w")) == NULL) {
         perror("Error: ");
         return -1;
-    }
+    } 
     
     // Writing image header
     fprintf(*fp, "P%d\n%s\n%d %d\n%d\n", img->P, img->comment, img->width,
@@ -120,12 +199,14 @@ int initfilestore(ImageData img, FILE** fp, char* nombre, long *position) {
 
 // Writing the image partition to the resulting file. dim is 
 // the exact size to write. offset is the displacement for avoid halos.
-int savingChunk(ImageData img, FILE **fp, int dim, int offset){
+int savingChunk(ImageData img, FILE **fp, long *offset, long count){
     // Writing image partition
-    int len = dim + offset;
-    for(int i = offset; i < len; i++) {
-        fprintf(*fp, "%d %d %d ", img->R[i], img->G[i], img->B[i]);
+    fseek(*fp, *offset, SEEK_SET);
+    printf("<%ld> - <%ld,%ld,%ld>\n", count, img->rsize, img->gsize, img->bsize);
+    for(long i = 0L; i < count; i++) {
+        fprintf(*fp, "%d\n%d\n%d\n", img->R[i], img->G[i], img->B[i]);
     }
+    *offset = ftell(*fp);
     return 0;
 }
 
@@ -238,21 +319,99 @@ double toSeconds(suseconds_t micros) {
     return (micros / F_MICROS_IN_SECOND);
 }
 
+long checkForRealloc(void **ptr, long csize, long margin, size_t psize,
+    long reallocInc) {
+    long nsize = csize;
+    void *temp = NULL, *temp2 = NULL;
+    if(nsize < margin) {
+        temp2 = *ptr;
+        printf("Prev: %ld\n", nsize);
+        nsize = nsize + reallocInc;
+        if((temp = realloc(temp2, nsize * psize)) == NULL) {
+            return -1;
+        } else {
+            *ptr = temp;
+        }
+        printf("New: %ld\n", nsize);
+    }
+    return nsize;
+}
+
+long rebuildImage(ImageData img, DataBucket *bucks) {
+    long r, g, b, tsize;
+    int flip;
+
+    r = g = b = 0L;
+    flip = 0;
+
+    for(int i = 0; i < THREAD_NUM; i++) {
+        for(int j = 0; j < bucks[i]->bsize; j++) {
+            switch(flip) {
+                case 0:
+                    img->R[r] = bucks[i]->data[j];
+                    r++;
+                    img->rsize = checkForRealloc((void**) &(img->R), 
+                        img->rsize, (r + REALLOC_MARGIN), sizeof(img->R[0]),
+                        INCREASE_FACTOR);
+                    break;
+                case 1:
+                    img->G[r] = bucks[i]->data[j];
+                    b++;
+                    img->gsize = checkForRealloc((void**) &(img->G), 
+                        img->gsize, (g + REALLOC_MARGIN), sizeof(img->G[0]),
+                        INCREASE_FACTOR);
+                    break;
+                case 2:
+                    img->B[r] = bucks[i]->data[j];
+                    g++;
+                    img->bsize = checkForRealloc((void**) &(img->B), 
+                        img->bsize, (b + REALLOC_MARGIN), sizeof(img->B[0]),
+                        INCREASE_FACTOR);
+                    break;
+            }
+            flip = (flip + 1) % 3;
+            bucks[i]->data[j] = 0;
+        }
+        bucks[i]->offset = 0;
+    }
+
+    tsize = (r + g + b);
+
+    switch(tsize % 3) {
+        case 0:
+            break;
+        case 2:
+            bucks[0]->data[1] = img->G[g - 1];
+            bucks[0]->offset += 1;
+            tsize -= 1;
+        case 1:
+            bucks[0]->data[0] = img->R[r - 1];
+            bucks[0]->offset += 1;
+            tsize -= 1;
+            break;
+    }
+
+    return (tsize / 3);
+}
+
 //--------------------------------------------------------------------------//
 // - MAIN METHOD -----------------------------------------------------------//
 //--------------------------------------------------------------------------//
 int main(int argc, char **argv) {
-    int c, offset;
-    int partitions, partsize, chunksize, halo, halosize;
+    int c, offset, t;
+    int partitions, partsize, halo, halosize;
     int iwidth, iheight;
-    long position;
+    int threadId, threadError;
+    long position, chunksize, itersize, bcksize;
     double start, tstart, tend, tread, tcopy, tconv, tstore, treadk;
     struct timeval tim;
     FILE *fpsrc, *fpdst;
     ImageData source, output;
     KernelData kern;
+    ImageChunk *chunkLst;
+    DataBucket *buckets;
 
-    c = offset = 0;
+    c = offset = t = 0;
     position = 0L;
     tstart = tend = tread = tcopy = tconv = tstore = treadk = 0.0;
     fpsrc = fpdst = NULL;
@@ -273,6 +432,9 @@ int main(int argc, char **argv) {
         printf("- partitions : Image partitions\n\n");
         return -1;
     }
+
+    omp_set_dynamic(FALSE);
+    omp_set_num_threads(THREAD_NUM);
     
     // READING IMAGE HEADERS, KERNEL Matrix, DUPLICATE IMAGE DATA, 
     // OPEN RESULTING IMAGE FILE
@@ -294,6 +456,7 @@ int main(int argc, char **argv) {
     } else { 
         halo = kern->kernelY;
     }
+
     gettimeofday(&tim, NULL);
     treadk = treadk + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
 
@@ -302,7 +465,7 @@ int main(int argc, char **argv) {
     gettimeofday(&tim, NULL);
     start = tim.tv_sec + toSeconds(tim.tv_usec);
     // Memory allocation based on number of partitions and halo size.
-    source = parseFileHeader(argv[1], &fpsrc, partitions, halo);
+    source = parseFileHeader(argv[1], &fpsrc, partitions, halo, SIZE_MARGIN);
     if (source == NULL) {
         return -1;
     }
@@ -316,7 +479,7 @@ int main(int argc, char **argv) {
     // Duplicate the image struct.
     gettimeofday(&tim, NULL);
     start = tim.tv_sec + toSeconds(tim.tv_usec);
-    if ((output = duplicateImageData(source, partitions, halo)) == NULL) {
+    if ((output = duplicateImageData(source, partitions, halo, SIZE_MARGIN)) == NULL) {
         return -1;
     }
     gettimeofday(&tim, NULL);
@@ -332,10 +495,25 @@ int main(int argc, char **argv) {
     gettimeofday(&tim, NULL);
     tstore = tstore + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
 
+    bcksize = (source->width * source->height * 3) / (partitions * THREAD_NUM);
+    bcksize = bcksize + (source->width * halo);
+    bcksize = (long) (bcksize * SIZE_MARGIN);
+
+    printf("PSIZE: %ld\n", source->rsize * 3);
+    printf("BSIZE: %ld\n", bcksize);
+    printf("IRSIZE: %ld\n", source->rsize);
+
+    chunkLst = calculateChunkSections(&fpsrc, source, partitions);
+
+    if ((buckets = initializeBuckets(THREAD_NUM, bcksize)) == NULL) {
+        perror("Error: ");
+        return -1;
+    }
+
     //----------------------------------------------------------------------//
     // CHUNK READING
     //----------------------------------------------------------------------//
-    partsize  = (source->height * source->width) / partitions;
+    partsize  = (iheight * iwidth) / partitions;
 
     while (c < partitions) {
         // Reading Next chunk.
@@ -346,29 +524,36 @@ int main(int argc, char **argv) {
             chunksize = partsize + (source->width * halosize);
             offset   = 0;
         } else if(c < (partitions - 1)) {
-            halosize  = halo;
-            chunksize = partsize + (source->width*halosize);
+            halosize  = halo - 1;
+            chunksize = partsize + (source->width * halosize);
             offset    = (source->width * (halo / 2));
         } else {
             halosize  = halo / 2;
-            chunksize = partsize + (source->width*halosize);
+            chunksize = partsize + (source->width * halosize);
             offset    = (source->width * halosize);
         }
-        
-        if (readImage(source, &fpsrc, chunksize, halo / 2, &position)) {
-            return -1;
+
+        if (readChunk(argv[1], &(chunkLst[c]->start), &(chunkLst[c]->end), 
+            buckets[THREAD_NUM - 1])) {
+             return -1;
         }
+
+        itersize = rebuildImage(source, buckets);
+
+        printf("Pixels to SAVE: %ld\n", itersize * 3);
+        
         gettimeofday(&tim, NULL);
         tread = tread + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
         
         // Duplicate the image chunk
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if ( duplicateImageChunk(source, output) ) {
+        if (duplicateImageChunk(source, output) == NULL) {
+            perror("Error: ");
             return -1;
         }
         gettimeofday(&tim, NULL);
-        tcopy = tcopy + (tim.tv_sec+toSeconds(tim.tv_usec) - start);
+        tcopy = tcopy + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
         
         //------------------------------------------------------------------//
         // - CHUNK CONVOLUTION ---------------------------------------------//
@@ -376,7 +561,7 @@ int main(int argc, char **argv) {
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
         
-        convolve2D(source->R, output->R, source->width, 
+        /*convolve2D(source->R, output->R, source->width, 
             (source->height/partitions) + halosize, kern->vkern, 
             kern->kernelX, kern->kernelY);
         convolve2D(source->G, output->G, source->width, 
@@ -384,7 +569,7 @@ int main(int argc, char **argv) {
             kern->kernelX, kern->kernelY);
         convolve2D(source->B, output->B, source->width, 
             (source->height/partitions) + halosize, kern->vkern, 
-            kern->kernelX, kern->kernelY);
+            kern->kernelX, kern->kernelY);*/
         
         gettimeofday(&tim, NULL);
         tconv = tconv + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
@@ -394,20 +579,19 @@ int main(int argc, char **argv) {
         //------------------------------------------------------------------//
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if (savingChunk(output, &fpdst, partsize, offset)) {
+        if (savingChunk(output, &fpdst, &position, itersize)) {
             perror("Error: ");
             return -1;
         }
+
         gettimeofday(&tim, NULL);
-        tstore = tstore + (tim.tv_sec+toSeconds(tim.tv_usec) - start);
+        tstore = tstore + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
+
         c++;
     }
 
     fclose(fpsrc);
     fclose(fpdst);
-    
-    freeImagestructure(&source);
-    freeImagestructure(&output);
     
     gettimeofday(&tim, NULL);
     tend = tim.tv_sec + toSeconds(tim.tv_usec);
@@ -416,6 +600,8 @@ int main(int argc, char **argv) {
     printf("|          IMAGE INFO             |\n");
     printf("-----------------------------------\n");
     printf("Name: %s\n", argv[1]);
+    printf("Header size (bytes): %ld\n", source->headersize);
+    printf("Raster size (bytes): %jd\n", source->rastersize);
     printf("ISizeX : %d\n", iwidth);
     printf("ISizeY : %d\n", iheight);
     printf("kSizeX : %d\n", kern->kernelX);
@@ -431,6 +617,10 @@ int main(int argc, char **argv) {
     printf("-----------------------------------\n");
     printf("%.6lfs elapsed in total.\n", tend-tstart);
     printf("-----------------------------------\n");
+
+    freeImagestructure(&source);
+    freeImagestructure(&output);
+
     return 0;
 }
 

@@ -25,11 +25,12 @@
 // -- METHOD DEFINITION --------------------------------------------------- //
 //--------------------------------------------------------------------------//
 
-int readImage(ImageData, FILE**, int, int, long int*);
-int duplicateImageChunk(ImageData, ImageData);
+int readChunk(char*, intmax_t*, intmax_t*, DataBucket);
+int readImage(ImageData, FILE**, int, int, long*);
+void* duplicateImageChunk(ImageData, ImageData);
 KernelData readKernel(char*);
 int initfilestore(ImageData, FILE**, char*, long*);
-int savingChunk(ImageData, FILE**, int, int);
+int savingChunk(ImageData, FILE**,long*, long);
 int convolve2D(int*, int*, int, int, float*, int, int);
 void freeImagestructure(ImageData*);
 
