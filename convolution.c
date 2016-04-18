@@ -238,7 +238,7 @@ void freeImagestructure(ImageData *src) {
 //
 // signed integer (32bit) version:
 //--------------------------------------------------------------------------//
-int convolve2D(int* in, int* out, int dataOffst, int dataSizeX, int dataSizeY,
+int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
                float* kernel, int kernelSizeX, int kernelSizeY) {
     int m, n;
     int *inPtr, *inPtr2, *outPtr;
@@ -259,7 +259,7 @@ int convolve2D(int* in, int* out, int dataOffst, int dataSizeX, int dataSizeY,
     
     // init working  pointers
     // note that  it is shifted (kCenterX, kCenterY),
-    inPtr = inPtr2 = &in[dataSizeX * kCenterY + kCenterX];
+    inPtr = inPtr2 = &in[(dataSizeX * kCenterY) + kCenterX];
     outPtr = out;
     kPtr = kernel;
     
@@ -420,7 +420,7 @@ long rebuildImage(ImageData img, DataBucket *bucks) {
 //--------------------------------------------------------------------------//
 int main(int argc, char **argv) {
     int c, offset, t;
-    int partitions, partsize, halo, halosize;
+    int partitions, halo, halosize;
     int iwidth, iheight;
     int threadId, threadError;
     long position, chunksize, itersize, bcksize;
@@ -562,20 +562,19 @@ int main(int argc, char **argv) {
 
         // Rows to convolve needs to be bigger than kernel size, either way
         // there'll be problems in pixel alignment.
-        if (c == 0) {
-            halosize = halo / 2;
+
+        halosize = (halo / 2);
+
+        if(c < (partitions - 1)) {
             chunksize = (convsize / source->width) - halosize;
-            offset = 0; // Value is in rows
-            //Applying offset to bucket
             buckets[0]->offset += (source->width * (halo-1) * 3);
-        } else if(c < (partitions - 1)) {
-            halosize = halo - 1;
-            chunksize = (convsize / source->width) - (halo / 2);
-            offset = (halo / 2);
-            //Applying offset to bucket
-            buckets[0]->offset += (source->width * (halo-1) * 3);
+            if(c == 0) {
+                offset = 0;
+            } else {
+                offset = halosize;
+            }
+
         } else {
-            halosize = halo / 2;
             chunksize = (convsize / source->width);
             offset = halosize;
         }
@@ -601,12 +600,12 @@ int main(int argc, char **argv) {
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
         
-        /*convolve2D(source->R, output->R, offset, source->width, chunksize, 
+        convolve2D(source->R, output->R, source->width, chunksize, 
             kern->vkern, kern->kernelX, kern->kernelY);
-        convolve2D(source->G, output->G, offset, source->width, chunksize, 
+        convolve2D(source->G, output->G, source->width, chunksize, 
             kern->vkern, kern->kernelX, kern->kernelY);
-        convolve2D(source->B, output->B, offset, source->width, chunksize, 
-            kern->vkern, kern->kernelX, kern->kernelY);*/
+        convolve2D(source->B, output->B, source->width, chunksize, 
+            kern->vkern, kern->kernelX, kern->kernelY);
         
         gettimeofday(&tim, NULL);
         tconv = tconv + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
