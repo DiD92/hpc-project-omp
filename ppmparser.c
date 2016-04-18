@@ -98,6 +98,24 @@ DataBucket* initializeBuckets(int nbuckets, long bsize) {
     return buckets;
 }
 
+void adjustBucketContents(DataBucket *buckets, int nbuckets) {
+
+    long bpos, pos;
+    int offset;
+
+    for(int i = 0; i < nbuckets; ++i) {
+        bpos = buckets[i]->bsize;
+        offset = buckets[i]->offset;
+        for(int j = 0; j < offset; ++j) {
+            pos = bpos - (offset - j);
+            //printf("Moving %d to %d\n", pos, j);
+            buckets[i]->data[j] = buckets[i]->data[pos];
+        }
+        buckets[i]->bsize = offset;
+    }
+
+}
+
 intmax_t getAdjustedPoint(FILE** f, intmax_t next) {
     fseek(*f, next, SEEK_SET);
     char c;

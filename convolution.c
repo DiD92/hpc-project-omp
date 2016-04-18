@@ -62,7 +62,8 @@ int readChunk(char* filen, intmax_t *offset, intmax_t *limit, DataBucket bucket)
     intmax_t pos = *offset;
     int value = 0, mult = 10;
     int nvalue = FALSE;
-    long k = bucket->offset;
+    int increase = INCREASE_FACTOR;
+    long k = bucket->offset, bucketms;
     char c;
 
     FILE *fp;
@@ -88,9 +89,13 @@ int readChunk(char* filen, intmax_t *offset, intmax_t *limit, DataBucket bucket)
             value = 0;
             nvalue = FALSE;
             k++;
+            bucketms = bucket->msize;
             bucket->msize = checkForRealloc((void**) &(bucket->data), 
                 bucket->msize, k + REALLOC_MARGIN, sizeof(bucket->data[0]),
-                INCREASE_FACTOR);
+                increase);
+            if(bucketms < bucket->msize) {
+                increase *= 2;
+            }
             if(bucket->msize == -1) {
                 perror("Error: ");
                 return -1;
@@ -199,11 +204,12 @@ int initfilestore(ImageData img, FILE** fp, char* nombre, long *position) {
 
 // Writing the image partition to the resulting file. dim is 
 // the exact size to write. offset is the displacement for avoid halos.
-int savingChunk(ImageData img, FILE **fp, long *offset, long count){
+int savingChunk(ImageData img, FILE **fp, long *offset, long dataOffst, 
+    long count){
+    printf("WRITING - %ld - %ld\n", dataOffst, count);
     // Writing image partition
     fseek(*fp, *offset, SEEK_SET);
-    printf("<%ld> - <%ld,%ld,%ld>\n", count, img->rsize, img->gsize, img->bsize);
-    for(long i = 0L; i < count; i++) {
+    for(long i = dataOffst; i < count; i++) {
         fprintf(*fp, "%d\n%d\n%d\n", img->R[i], img->G[i], img->B[i]);
     }
     *offset = ftell(*fp);
@@ -232,7 +238,7 @@ void freeImagestructure(ImageData *src) {
 //
 // signed integer (32bit) version:
 //--------------------------------------------------------------------------//
-int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
+int convolve2D(int* in, int* out, int dataOffst, int dataSizeX, int dataSizeY,
                float* kernel, int kernelSizeX, int kernelSizeY) {
     int m, n;
     int *inPtr, *inPtr2, *outPtr;
@@ -324,68 +330,83 @@ long checkForRealloc(void **ptr, long csize, long margin, size_t psize,
     long nsize = csize;
     void *temp = NULL, *temp2 = NULL;
     if(nsize < margin) {
+        //printf("---NECESSARY REALLOC DETECTED---\n");
         temp2 = *ptr;
-        printf("Prev: %ld\n", nsize);
         nsize = nsize + reallocInc;
         if((temp = realloc(temp2, nsize * psize)) == NULL) {
             return -1;
         } else {
             *ptr = temp;
         }
-        printf("New: %ld\n", nsize);
+        //printf("RESIZED: %ld -> %ld\n", csize, nsize);
+        //printf("--------------------------------\n");
     }
     return nsize;
 }
 
 long rebuildImage(ImageData img, DataBucket *bucks) {
     long r, g, b, tsize;
+    long rasterR, rasterG, rasterB;
+    long increaseR, increaseG, increaseB;
     int flip;
 
     r = g = b = 0L;
     flip = 0;
+    increaseR = increaseG = increaseB = INCREASE_FACTOR;
 
-    for(int i = 0; i < THREAD_NUM; i++) {
+    for(int i = 0; i < 1; i++) {
         for(int j = 0; j < bucks[i]->bsize; j++) {
             switch(flip) {
                 case 0:
                     img->R[r] = bucks[i]->data[j];
                     r++;
+                    rasterR = img->rsize;
                     img->rsize = checkForRealloc((void**) &(img->R), 
                         img->rsize, (r + REALLOC_MARGIN), sizeof(img->R[0]),
-                        INCREASE_FACTOR);
+                        increaseR);
+                    if(rasterR < img->rsize) {
+                        increaseR *= 2;
+                    }
                     break;
                 case 1:
-                    img->G[r] = bucks[i]->data[j];
-                    b++;
+                    img->G[g] = bucks[i]->data[j];
+                    g++;
+                    rasterG = img->gsize;
                     img->gsize = checkForRealloc((void**) &(img->G), 
                         img->gsize, (g + REALLOC_MARGIN), sizeof(img->G[0]),
-                        INCREASE_FACTOR);
+                        increaseG);
+                    if(rasterG < img->gsize) {
+                        increaseG *= 2;
+                    }
                     break;
                 case 2:
-                    img->B[r] = bucks[i]->data[j];
-                    g++;
+                    img->B[b] = bucks[i]->data[j];
+                    b++;
+                    rasterB = img->bsize;
                     img->bsize = checkForRealloc((void**) &(img->B), 
                         img->bsize, (b + REALLOC_MARGIN), sizeof(img->B[0]),
-                        INCREASE_FACTOR);
+                        increaseB);
+                    if(rasterB < img->bsize) {
+                        increaseB *= 2;
+                    }
                     break;
             }
             flip = (flip + 1) % 3;
-            bucks[i]->data[j] = 0;
         }
         bucks[i]->offset = 0;
     }
 
     tsize = (r + g + b);
 
+    printf("R: %ld G: %ld B: %ld\n", r, g, b);
+
     switch(tsize % 3) {
         case 0:
             break;
         case 2:
-            bucks[0]->data[1] = img->G[g - 1];
             bucks[0]->offset += 1;
             tsize -= 1;
         case 1:
-            bucks[0]->data[0] = img->R[r - 1];
             bucks[0]->offset += 1;
             tsize -= 1;
             break;
@@ -403,6 +424,7 @@ int main(int argc, char **argv) {
     int iwidth, iheight;
     int threadId, threadError;
     long position, chunksize, itersize, bcksize;
+    long convoffset, convsize;
     double start, tstart, tend, tread, tcopy, tconv, tstore, treadk;
     struct timeval tim;
     FILE *fpsrc, *fpdst;
@@ -505,7 +527,7 @@ int main(int argc, char **argv) {
 
     chunkLst = calculateChunkSections(&fpsrc, source, partitions);
 
-    if ((buckets = initializeBuckets(THREAD_NUM, bcksize)) == NULL) {
+    if ((buckets = initializeBuckets(1, bcksize)) == NULL) {
         perror("Error: ");
         return -1;
     }
@@ -513,37 +535,55 @@ int main(int argc, char **argv) {
     //----------------------------------------------------------------------//
     // CHUNK READING
     //----------------------------------------------------------------------//
-    partsize  = (iheight * iwidth) / partitions;
 
     while (c < partitions) {
+
+        printf("-----------------------------------------------\n");
         // Reading Next chunk.
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if (c == 0) {
-            halosize  = halo / 2;
-            chunksize = partsize + (source->width * halosize);
-            offset   = 0;
-        } else if(c < (partitions - 1)) {
-            halosize  = halo - 1;
-            chunksize = partsize + (source->width * halosize);
-            offset    = (source->width * (halo / 2));
-        } else {
-            halosize  = halo / 2;
-            chunksize = partsize + (source->width * halosize);
-            offset    = (source->width * halosize);
-        }
 
         if (readChunk(argv[1], &(chunkLst[c]->start), &(chunkLst[c]->end), 
-            buckets[THREAD_NUM - 1])) {
+            buckets[0])) {
              return -1;
         }
 
         itersize = rebuildImage(source, buckets);
 
-        printf("Pixels to SAVE: %ld\n", itersize * 3);
+        // Discarding incomplete row.
+        convoffset = (itersize % source->width);
+        convsize = itersize - convoffset;
+
+        //Applying offset to bucket
+        buckets[0]->offset += (convoffset * 3);
         
         gettimeofday(&tim, NULL);
         tread = tread + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
+
+        // Rows to convolve needs to be bigger than kernel size, either way
+        // there'll be problems in pixel alignment.
+        if (c == 0) {
+            halosize = halo / 2;
+            chunksize = (convsize / source->width) - halosize;
+            offset = 0; // Value is in rows
+            //Applying offset to bucket
+            buckets[0]->offset += (source->width * (halo-1) * 3);
+        } else if(c < (partitions - 1)) {
+            halosize = halo - 1;
+            chunksize = (convsize / source->width) - (halo / 2);
+            offset = (halo / 2);
+            //Applying offset to bucket
+            buckets[0]->offset += (source->width * (halo-1) * 3);
+        } else {
+            halosize = halo / 2;
+            chunksize = (convsize / source->width);
+            offset = halosize;
+        }
+
+        printf("Pixels aligned: %ld\nRows to convolve %ld\n", convsize, 
+            chunksize);
+
+        printf("TOTAL BUCKET OFFSET: %d\n", buckets[0]->offset);
         
         // Duplicate the image chunk
         gettimeofday(&tim, NULL);
@@ -561,15 +601,12 @@ int main(int argc, char **argv) {
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
         
-        /*convolve2D(source->R, output->R, source->width, 
-            (source->height/partitions) + halosize, kern->vkern, 
-            kern->kernelX, kern->kernelY);
-        convolve2D(source->G, output->G, source->width, 
-            (source->height/partitions) + halosize, kern->vkern, 
-            kern->kernelX, kern->kernelY);
-        convolve2D(source->B, output->B, source->width, 
-            (source->height/partitions) + halosize, kern->vkern, 
-            kern->kernelX, kern->kernelY);*/
+        /*convolve2D(source->R, output->R, offset, source->width, chunksize, 
+            kern->vkern, kern->kernelX, kern->kernelY);
+        convolve2D(source->G, output->G, offset, source->width, chunksize, 
+            kern->vkern, kern->kernelX, kern->kernelY);
+        convolve2D(source->B, output->B, offset, source->width, chunksize, 
+            kern->vkern, kern->kernelX, kern->kernelY);*/
         
         gettimeofday(&tim, NULL);
         tconv = tconv + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
@@ -578,14 +615,18 @@ int main(int argc, char **argv) {
         // - CHUNK SAVING --------------------------------------------------//
         //------------------------------------------------------------------//
         gettimeofday(&tim, NULL);
+
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if (savingChunk(output, &fpdst, &position, itersize)) {
+        if (savingChunk(output, &fpdst, &position, offset * source->width, 
+                        chunksize * source->width)) {
             perror("Error: ");
             return -1;
         }
 
         gettimeofday(&tim, NULL);
         tstore = tstore + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
+
+        adjustBucketContents(buckets, 1);
 
         c++;
     }

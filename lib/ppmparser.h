@@ -76,6 +76,7 @@ FILE* openFile(char*, char*);
 off_t fsize(const char*);
 ImageChunk* calculateChunkSections(FILE**, ImageData, int);
 DataBucket* initializeBuckets(int, long);
+void adjustBucketContents(DataBucket*, int);
 intmax_t getAdjustedPoint(FILE** f, intmax_t next);
 ImageData parseFileHeader(char*, FILE**, int, int, double);
 ImageData duplicateImageData(ImageData, int, int, double);
