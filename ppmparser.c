@@ -12,19 +12,14 @@
 // -- EXTERNAL LIBRARIES -------------------------------------------------- //
 //--------------------------------------------------------------------------//
 
-#include <string.h>
+#include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 //--------------------------------------------------------------------------//
 
 #include "lib/ppmparser.h"
-
-//--------------------------------------------------------------------------//
-// -- MACRO DEFINITION -----------------------------------------------------//
-//--------------------------------------------------------------------------//
-
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
 //--------------------------------------------------------------------------//
 // -- LIBRARY IMPLEMENTATION ---------------------------------------------- //
@@ -80,6 +75,13 @@ ImageChunk* calculateChunkSections(FILE** f, ImageData img, int partitions) {
 
 }
 
+void freeChunkList(ImageChunk* chunkLst, int lsize) {
+    for(int i = 0; i < lsize; i++) {
+        free(chunkLst[i]);
+    }
+    free(chunkLst);
+}
+
 DataBucket* initializeBuckets(int nbuckets, long bsize) {
 
     DataBucket *buckets;
@@ -90,12 +92,20 @@ DataBucket* initializeBuckets(int nbuckets, long bsize) {
         buckets[i] = malloc(sizeof(struct databucket));
         buckets[i]->bsize = 0;
         buckets[i]->msize = bsize;
-        printf("%ld\n", buckets[i]->msize = bsize);
         buckets[i]->offset = 0;
         buckets[i]->data = calloc(sizeof(int), bsize);
     }
 
     return buckets;
+}
+
+void freeDataBuckets(DataBucket* buckets, int nbuckets) {
+
+    for(int i = 0; i < nbuckets; i++) {
+        free(buckets[i]->data);
+        free(buckets[i]);
+    }
+    free(buckets);
 }
 
 void adjustBucketContents(DataBucket *buckets, int nbuckets) {
@@ -108,7 +118,6 @@ void adjustBucketContents(DataBucket *buckets, int nbuckets) {
         offset = buckets[i]->offset;
         for(int j = 0; j < offset; ++j) {
             pos = bpos - (offset - j);
-            //printf("Moving %d to %d\n", pos, j);
             buckets[i]->data[j] = buckets[i]->data[pos];
         }
         buckets[i]->bsize = offset;
@@ -121,13 +130,13 @@ intmax_t getAdjustedPoint(FILE** f, intmax_t next) {
     char c;
     do {
         c = fgetc(*f);
-    } while(c > 47 && c < 58);
-    return (ftell(*f)-1);
+    } while(isdigit(c));
+    return (ftell(*f) - 1);
 }
 
 // Open Image file and image struct initialization
-ImageData parseFileHeader(char* nombre, FILE **fp, int partitions, int halo,
-    double sizeMargin) {
+ImageData parseFileHeader(char* nombre, FILE **fp, int partitions, int halo, 
+    double incFactor) {
     char c, comment[300];
     int i;
     ImageData img = NULL;
@@ -151,7 +160,7 @@ ImageData parseFileHeader(char* nombre, FILE **fp, int partitions, int halo,
         }
         comment[i] = '\0';
         // Allocating information for the image comment
-        img->comment = calloc(strlen(comment), sizeof(char));
+        img->comment = (char*) calloc(strlen(comment)+1, sizeof(char));
         strcpy(img->comment, comment);
         // Reading image dimensions and color resolution
         fscanf(*fp, "%d %d %d\n", &img->width, &img->height, &img->maxcolor);
@@ -162,7 +171,8 @@ ImageData parseFileHeader(char* nombre, FILE **fp, int partitions, int halo,
         chunk = img->width * (img->height / partitions);
         // We need to read halo extra rows.
         chunk = chunk + img->width * halo;
-        chunk = (long) (chunk * sizeMargin);
+
+        chunk = (long)((double) chunk * incFactor);
 
         img->rsize = img->gsize = img->bsize = chunk;
 
@@ -180,7 +190,7 @@ ImageData parseFileHeader(char* nombre, FILE **fp, int partitions, int halo,
 
 // Duplicate the Image struct for the resulting image
 ImageData duplicateImageData(ImageData src, int partitions, int halo, 
-    double sizeMargin) {
+    double incFactor) {
     long chunk;
     // Struct memory allocation
     ImageData dst = (ImageData) malloc(sizeof(struct imageppm));
@@ -188,7 +198,7 @@ ImageData duplicateImageData(ImageData src, int partitions, int halo,
     // Copying the magic number
     dst->P = src->P;
     // Copying the string comment
-    dst->comment = calloc(strlen(src->comment), sizeof(char));
+    dst->comment = calloc(strlen(src->comment)+1, sizeof(char));
     strcpy(dst->comment, src->comment);
     // Copying image dimensions and color resolution
     dst->width = src->width;
@@ -197,7 +207,8 @@ ImageData duplicateImageData(ImageData src, int partitions, int halo,
     chunk = dst->width * (dst->height / partitions);
     // We need to read an extra row.
     chunk = chunk + src->width * halo;
-    chunk = (long) (chunk * sizeMargin);
+
+    chunk = (long)((double) chunk * incFactor);
 
     dst->rsize = src->rsize;
     dst->gsize = src->gsize;

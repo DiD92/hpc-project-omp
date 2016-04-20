@@ -15,10 +15,6 @@
 // -- EXTERNAL LIBRARIES -------------------------------------------------- //
 //--------------------------------------------------------------------------//
 
-#include <stdio.h>
-
-//--------------------------------------------------------------------------//
-
 #include "ppmparser.h"
 
 //--------------------------------------------------------------------------//
@@ -26,7 +22,6 @@
 //--------------------------------------------------------------------------//
 
 int readChunk(char*, intmax_t*, intmax_t*, DataBucket);
-int readImage(ImageData, FILE**, int, int, long*);
 void* duplicateImageChunk(ImageData, ImageData);
 KernelData readKernel(char*);
 int initfilestore(ImageData, FILE**, char*, long*);

@@ -43,6 +43,8 @@ struct imageppm {
 
 typedef struct imageppm* ImageData;
 
+//--------------------------------------------------------------------------//
+
 struct structkernel {
     int kernelX;
     int kernelY;
@@ -51,12 +53,16 @@ struct structkernel {
 
 typedef struct structkernel* KernelData;
 
+//--------------------------------------------------------------------------//
+
 struct imgchunk {
     intmax_t start;
     intmax_t end;
 };
 
 typedef struct imgchunk* ImageChunk;
+
+//--------------------------------------------------------------------------//
 
 struct databucket {
 
@@ -75,7 +81,9 @@ typedef struct databucket* DataBucket;
 FILE* openFile(char*, char*);
 off_t fsize(const char*);
 ImageChunk* calculateChunkSections(FILE**, ImageData, int);
+void freeChunkList(ImageChunk*, int);
 DataBucket* initializeBuckets(int, long);
+void freeDataBuckets(DataBucket*, int);
 void adjustBucketContents(DataBucket*, int);
 intmax_t getAdjustedPoint(FILE** f, intmax_t next);
 ImageData parseFileHeader(char*, FILE**, int, int, double);
