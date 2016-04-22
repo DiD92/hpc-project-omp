@@ -20,9 +20,11 @@
 //--------------------------------------------------------------------------//
 
 #include <ctype.h>
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 //--------------------------------------------------------------------------//
 
@@ -33,7 +35,7 @@
 //--------------------------------------------------------------------------//
 
 #define F_MICROS_IN_SECOND 1000000.0
-#define THREAD_NUM 1
+#define THREAD_NUM 3
 
 #define TRUE 1
 #define FALSE 0
@@ -206,7 +208,7 @@ int savingChunk(ImageData img, FILE **fp, long *offset, long dataOffst,
     fseek(*fp, *offset, SEEK_SET);
     
     for(long i = dataOffst; i < count; i++) {
-        fprintf(*fp, "%d\n%d\n%d\n", img->R[i], img->G[i], img->B[i]);
+        fprintf(*fp, "%d %d %d\n", img->R[i], img->G[i], img->B[i]);
     }
     *offset = ftell(*fp);
     return 0;
@@ -234,11 +236,11 @@ void freeImagestructure(ImageData *src) {
 //
 // signed integer (32bit) version:
 //--------------------------------------------------------------------------//
-int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
+int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY, int dataOff,
                float* kernel, int kernelSizeX, int kernelSizeY) {
     int m, n;
-    int *inPtr, *inPtr2, *outPtr;
-    float *kPtr;
+    int *inPtr = NULL, *inPtr2 = NULL, *outPtr = NULL;
+    float *kPtr = NULL;
     int kCenterX, kCenterY;
     int rowMin, rowMax;                    // to check boundary of input array
     int colMin, colMax;                    //
@@ -261,20 +263,20 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
     
     // start convolution
     // number of rows
-    for(int i = 0; i < dataSizeY; ++i) {
+    for(register int i = 0; i < dataSizeY; ++i) {
         // compute the range of convolution, the current row of kernel 
         // should be between these
         rowMax = i + kCenterY;
         rowMin = i - dataSizeY + kCenterY;
         
         // number of columns
-        for(int j = 0; j < dataSizeX; ++j) {
+        for(register int j = 0; j < dataSizeX; ++j) {
             // compute the range of convolution, the current column of kernel 
             // should be between these
             colMax = j + kCenterX;
             colMin = j - dataSizeX + kCenterX;
             
-            sum = 0;                        // set to 0 before accumulate
+            sum = 0.0f;                        // set to 0 before accumulate
             
             // flip the kernel and traverse all the kernel values
             // multiply each kernel value with underlying input data
@@ -300,7 +302,7 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
             }
             
             // convert integer number
-            if(sum >= 0) { 
+            if(sum >= 0.0f) { 
                 *outPtr = (int)(sum + 0.5f);
             } else  { // For using with image editors like GIMP or others...
                 *outPtr = (int)(sum - 0.5f);
@@ -316,10 +318,12 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY,
 }
 
 //--------------------------------------------------------------------------//
+// -- AUXILIARY METHODS IMPLEMENTATION ------------------------------------ //
+//--------------------------------------------------------------------------//
 
 double calculateExtraSize(int partitions) {
     double x = (double) partitions;
-    return (x / (15 + 3*x)) - 0.058;
+    return (x / (15 + 3*x)) - 0.058f;
 }
 
 double toSeconds(suseconds_t micros) {
@@ -428,22 +432,32 @@ long rebuildImage(ImageData img, DataBucket *bucks) {
 //--------------------------------------------------------------------------//
 // - MAIN METHOD -----------------------------------------------------------//
 //--------------------------------------------------------------------------//
+
 int main(int argc, char **argv) {
+
     int c, offset;
     int partitions, halo, haloSize;
     int imgWidth, imgHeight;
+    int convOffset, convSize;
+
     long position, chunkSize, iterSize, bucketSize;
-    long convOffset, convSize;
+    
     double start, tstart, tend, tread, tcopy, tconv, tstore, treadk;
-    double extraSizeFactor;
+    float extraSizeFactor;
+
     struct timeval tim;
 
     char *sourceFile, *outFile, *kernFile;
+    char cwd[1024];
 
     FILE *fpsrc, *fpdst;
+
     ImageData source, output;
+
     KernelData kern;
+
     ImageChunk *chunkLst;
+
     DataBucket *buckets;
 
     c = offset = 0;
@@ -454,7 +468,7 @@ int main(int argc, char **argv) {
     source = output = NULL;
     kern = NULL;
 
-    extraSizeFactor = 1.0;
+    extraSizeFactor = 1.0f;
     
     if(argc != 5) {
         printf("Usage: %s <image-file> <kernel-file> <result-file> "
@@ -470,6 +484,11 @@ int main(int argc, char **argv) {
         printf("- partitions : Image partitions\n\n");
         return -1;
     }
+
+    omp_set_dynamic(FALSE);
+    omp_set_num_threads(THREAD_NUM);
+
+    getcwd(cwd, sizeof(cwd));
 
     //Storing parameters
     sourceFile = argv[1];
@@ -543,7 +562,7 @@ int main(int argc, char **argv) {
     bucketSize = (imgWidth * imgHeight * 3) / (partitions * 1);
     bucketSize = bucketSize + (imgWidth * halo);
 
-    bucketSize = (long)((double) bucketSize * extraSizeFactor);
+    bucketSize = (long) ((float) bucketSize * extraSizeFactor);
 
     chunkLst = calculateChunkSections(&fpsrc, source, partitions);
 
@@ -553,7 +572,7 @@ int main(int argc, char **argv) {
     }
 
     //----------------------------------------------------------------------//
-    // CHUNK READING
+    // CHUNK PROCESSING LOOP
     //----------------------------------------------------------------------//
 
     while (c < partitions) {
@@ -567,6 +586,7 @@ int main(int argc, char **argv) {
              return -1;
         }
 
+        // Copying data from the DataBucket into the ImageData arrays
         iterSize = rebuildImage(source, buckets);
 
         gettimeofday(&tim, NULL);
@@ -613,13 +633,22 @@ int main(int argc, char **argv) {
         //------------------------------------------------------------------//
         gettimeofday(&tim, NULL);
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        
-        convolve2D(source->R, output->R, imgWidth, chunkSize, 
-            kern->vkern, kern->kernelX, kern->kernelY);
-        convolve2D(source->G, output->G, imgWidth, chunkSize, 
-            kern->vkern, kern->kernelX, kern->kernelY);
-        convolve2D(source->B, output->B, imgWidth, chunkSize, 
-            kern->vkern, kern->kernelX, kern->kernelY);
+
+        #pragma omp parallel
+        {
+            #pragma omp sections 
+            {
+                #pragma omp section
+                    convolve2D(source->R, output->R, imgWidth, chunkSize, 
+                        offset, kern->vkern, kern->kernelX, kern->kernelY);
+                #pragma omp section
+                    convolve2D(source->G, output->G, imgWidth, chunkSize, 
+                        offset, kern->vkern, kern->kernelX, kern->kernelY);
+                #pragma omp section
+                    convolve2D(source->B, output->B, imgWidth, chunkSize, 
+                        offset, kern->vkern, kern->kernelX, kern->kernelY);
+            }
+        }
         
         gettimeofday(&tim, NULL);
         tconv = tconv + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
@@ -630,8 +659,8 @@ int main(int argc, char **argv) {
         gettimeofday(&tim, NULL);
 
         start = tim.tv_sec + toSeconds(tim.tv_usec);
-        if (savingChunk(output, &fpdst, &position, offset * imgWidth, 
-                        chunkSize * imgWidth)) {
+        if (savingChunk(output, &fpdst, &position, (offset * imgWidth), 
+                        (chunkSize * imgWidth))) {
             perror("Error: ");
             return -1;
         }
@@ -639,9 +668,14 @@ int main(int argc, char **argv) {
         gettimeofday(&tim, NULL);
         tstore = tstore + (tim.tv_sec + toSeconds(tim.tv_usec) - start);
 
-        adjustBucketContents(buckets, 1);
+        // Moving previously discarded pixels to the beginning of the bucket
+        // for the next iteration
 
         c++;
+
+        if(c < partitions) {
+            adjustBucketContents(buckets, 1);
+        }
     }
 
     fclose(fpsrc);
@@ -651,9 +685,8 @@ int main(int argc, char **argv) {
     tend = tim.tv_sec + toSeconds(tim.tv_usec);
     
     printf("-----------------------------------\n");
-    printf("|          SYSTEM INFO            |\n");
+    printf("|       TYPE SIZES (BYTES)        |\n");
     printf("-----------------------------------\n");
-    printf("--------TYPE SIZES (BYTES)---------\n");
     printf("Size of short: ----> %ld\n", sizeof(short));
     printf("Size of int: ------> %ld\n", sizeof(int));
     printf("Size of long: -----> %ld\n", sizeof(long));
@@ -664,7 +697,8 @@ int main(int argc, char **argv) {
     printf("-----------------------------------\n");
     printf("|          IMAGE INFO             |\n");
     printf("-----------------------------------\n");
-    printf("Name: %s\n", sourceFile);
+    printf("CWD: %s\n", cwd);
+    printf("File path (relative to CWD): %s\n", sourceFile);
     printf("Header size (bytes): %ld\n", source->headersize);
     printf("Raster size (bytes): %jd\n", source->rastersize);
     printf("ISizeX : %d\n", imgWidth);

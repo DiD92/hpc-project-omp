@@ -1,5 +1,8 @@
+//--------------------------------------------------------------------------//
+
 #ifndef __CONVOLUTION_H__
 #define __CONVOLUTION_H__
+
 //--------------------------------------------------------------------------//
 //
 //  convolution.h
@@ -26,8 +29,11 @@ void* duplicateImageChunk(ImageData, ImageData);
 KernelData readKernel(char*);
 int initfilestore(ImageData, FILE**, char*, long*);
 int savingChunk(ImageData, FILE**, long*, long, long);
-int convolve2D(int*, int*, int, int, float*, int, int);
+int convolve2D(int*, int*, int, int, int, float*, int, int);
 void freeImagestructure(ImageData*);
 
 //--------------------------------------------------------------------------//
+
 #endif
+
+//--------------------------------------------------------------------------//

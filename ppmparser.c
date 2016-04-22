@@ -91,7 +91,7 @@ DataBucket* initializeBuckets(int nbuckets, long bsize) {
     for(int i = 0; i < nbuckets; i++) {
         buckets[i] = malloc(sizeof(struct databucket));
         buckets[i]->bsize = 0;
-        buckets[i]->msize = bsize;
+        buckets[i]->msize = 0;
         buckets[i]->offset = 0;
         buckets[i]->data = calloc(sizeof(int), bsize);
     }
@@ -172,7 +172,7 @@ ImageData parseFileHeader(char* nombre, FILE **fp, int partitions, int halo,
         // We need to read halo extra rows.
         chunk = chunk + img->width * halo;
 
-        chunk = (long)((double) chunk * incFactor);
+        chunk = (long) ((float) chunk * incFactor);
 
         img->rsize = img->gsize = img->bsize = chunk;
 
@@ -208,7 +208,7 @@ ImageData duplicateImageData(ImageData src, int partitions, int halo,
     // We need to read an extra row.
     chunk = chunk + src->width * halo;
 
-    chunk = (long)((double) chunk * incFactor);
+    chunk = (long) ((float) chunk * incFactor);
 
     dst->rsize = src->rsize;
     dst->gsize = src->gsize;
@@ -223,3 +223,6 @@ ImageData duplicateImageData(ImageData src, int partitions, int halo,
 
     return dst;
 }
+
+//--------------------------------------------------------------------------//
+
