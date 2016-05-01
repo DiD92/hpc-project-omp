@@ -35,7 +35,6 @@
 //--------------------------------------------------------------------------//
 
 #define F_MICROS_IN_SECOND 1000000.0
-#define THREAD_NUM 3
 
 #define TRUE 1
 #define FALSE 0
@@ -47,6 +46,7 @@
 // -- AUXILIARY METHODS ----------------------------------------------------//
 //--------------------------------------------------------------------------//
 
+int validateParameters(char**);
 double calculateExtraSize(int partitions);
 double toSeconds(suseconds_t);
 long checkForRealloc(void**, long, long, size_t, long);
@@ -321,6 +321,23 @@ int convolve2D(int* in, int* out, int dataSizeX, int dataSizeY, int dataOff,
 // -- AUXILIARY METHODS IMPLEMENTATION ------------------------------------ //
 //--------------------------------------------------------------------------//
 
+int validateParameters(char **args) {
+    if(access(args[1], F_OK)) {
+        perror("Input image error");
+        return -1;
+    } else if(access(args[2], F_OK)) {
+        perror("Kernel file error");
+        return -1;
+    } else if(atoi(args[4]) < 1) {
+        printf("Partition number error: value less than 1\n");
+        return -1;
+    } else if(atoi(args[5]) < 1) {
+        printf("Thread number error: value less than 1\n");
+        return -1;
+    }
+    return 0;
+}
+
 double calculateExtraSize(int partitions) {
     double x = (double) partitions;
     return (x / (15 + 3*x)) - 0.058f;
@@ -435,7 +452,7 @@ long rebuildImage(ImageData img, DataBucket *bucks) {
 
 int main(int argc, char **argv) {
 
-    int c, offset;
+    int c, offset, nThreads;
     int partitions, halo, haloSize;
     int imgWidth, imgHeight;
     int convOffset, convSize;
@@ -470,31 +487,34 @@ int main(int argc, char **argv) {
 
     extraSizeFactor = 1.0f;
     
-    if(argc != 5) {
+    if(argc != 6) {
         printf("Usage: %s <image-file> <kernel-file> <result-file> "
-            "<partitions>\n", argv[0]);
+            "<partitions> <threads>\n\n", argv[0]);
         
-        printf("\n\nError, Missing parameters:\n");
-        printf("format: ./serialconvolution image_file kernel_file "
-            "result_file\n");
         printf("- image_file : source image path (*.ppm)\n");
         printf("- kernel_file: kernel path (text file with 1D "
             "kernel matrix)\n");
         printf("- result_file: result image path (*.ppm)\n");
-        printf("- partitions : Image partitions\n\n");
+        printf("- partitions : Image partitions\n");
+        printf("- threads : num threads\n\n");
         return -1;
     }
 
-    omp_set_dynamic(FALSE);
-    omp_set_num_threads(THREAD_NUM);
-
-    getcwd(cwd, sizeof(cwd));
+    if(validateParameters(argv) == -1) {
+        return -1;
+    }
 
     //Storing parameters
     sourceFile = argv[1];
     kernFile = argv[2];
     outFile = argv[3];
     partitions = atoi(argv[4]);
+    nThreads = atoi(argv[5]);
+
+    omp_set_dynamic(FALSE);
+    omp_set_num_threads(nThreads);
+
+    getcwd(cwd, sizeof(cwd));
     
     // READING IMAGE HEADERS, KERNEL Matrix, DUPLICATE IMAGE DATA, 
     // OPEN RESULTING IMAGE FILE
@@ -697,8 +717,9 @@ int main(int argc, char **argv) {
     printf("-----------------------------------\n");
     printf("|          IMAGE INFO             |\n");
     printf("-----------------------------------\n");
-    printf("CWD: %s\n", cwd);
-    printf("File path (relative to CWD): %s\n", sourceFile);
+    printf("Working directory: %s\n", cwd);
+    printf("File path: %s\n", sourceFile);
+    printf("File output: %s\n", outFile);
     printf("Header size (bytes): %ld\n", source->headersize);
     printf("Raster size (bytes): %jd\n", source->rastersize);
     printf("ISizeX : %d\n", imgWidth);
@@ -716,6 +737,8 @@ int main(int argc, char **argv) {
     printf("-----------------------------------\n");
     printf("%.6lfs elapsed in total.\n", tend-tstart);
     printf("-----------------------------------\n");
+    /*printf("%d %d %d %f\n", atoi(&sourceFile[strlen(sourceFile)-5]),
+        partitions, nThreads, tconv);*/
 
     //----------------------------------------------------------------------//
     // - MEMORY CLEANING  --------------------------------------------------//
